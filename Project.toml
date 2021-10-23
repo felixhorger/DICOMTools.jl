@@ -1,0 +1,7 @@
+name = "DICOMTools"
+uuid = "597a1ee7-c795-4831-9580-4b08c9a95592"
+authors = ["Felix Horger"]
+version = "0.1.0"
+
+[deps]
+DICOM = "a26e6606-dd52-5f6a-a97f-4f611373d757"
