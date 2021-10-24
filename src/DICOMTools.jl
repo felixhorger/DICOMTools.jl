@@ -3,7 +3,9 @@ module DICOMTools
 
 	export gettag
 	export dcm2array
-	export load_dcmdict
+	export load_dcms
+	export load_pixeldata!
+	export merge_multiseries
 
 	using DICOM
 
@@ -65,6 +67,9 @@ module DICOMTools
 	function load_dcms(directory::String; skip_pixels::Bool=false)::DICOMDict
 		# Should pixels be skipped?
 		aux_vr = skip_pixels ? Dict((0x7FE0, 0x0010) => DICOM.empty_vr) : Dict()
+		# TODO: Could use max_group, but then the question is what other tags the user might need.
+		# Potentially it is good to just add aux_vr and max_group and hand them through to dcm_parse,
+		# shifting the problem on the users' side
 
 		dcmdict = DICOMDict()
 		for (root, _, files) in walkdir(directory)
@@ -85,17 +90,43 @@ module DICOMTools
 
 
 
+	function read_tag!(dcm::DICOM.DICOMData, tag::Tuple{UInt16, UInt16}, filename::String)
+		# Remove tag from vr
+		delete!(dcm.vr, tag)
+
+		# Get starting position in file
+		start = dcm[tag]
+
+		# Open file and read
+		open(filename, "r") do f
+			seek(f, start)
+			(gelt, data, vr) = DICOM.read_element(f, dcm)
+			if gelt == DICOM.empty_tag
+				error("Could not read element $tag")
+			else
+				dcm[gelt] = data
+			end
+		end
+	end
+
 	function load_pixeldata!(dcmdict::DICOMDict)
 		for element in values(dcmdict)
 			for (path, dcm) in zip(element.paths, element.dcms)
-				DICOM.read_tag!(dcm, tag"PixelData", path)
+				read_tag!(dcm, tag"PixelData", path)
 			end
 		end
 	end
 
 
 
-	# Construct arrays and save
+	"""
+		merge_multiseries(dcmdict, uids, tag, data_type=Nothing, tag_type=Nothing)
+
+		Get an array extracted from multiple DICOM series.
+		For example useful for MRI: fitting relaxation curves to series
+		acquired with different inversion/echo times.
+
+	"""
 	function merge_multiseries(
 		dcmdict::DICOMDict,
 		uids::AbstractVector{<: String},
@@ -103,7 +134,7 @@ module DICOMTools
 		data_type::Type = Nothing,
 		tag_type::Type = Nothing
 	)::Tuple{Array, Vector}
-		# TODO: Add option to Register images
+		# TODO: Add option to Register images?
 
 		# Get the respective DICOMs
 		selected = Vector{Vector{DICOM.DICOMData}}(undef, length(uids))
