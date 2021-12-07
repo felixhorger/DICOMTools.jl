@@ -1,7 +1,8 @@
 
 module DICOMTools
 
-	export gettag
+	export get_tag
+	export get_transformation_matrix
 	export dcm2array
 	export load_dcms
 	export load_pixeldata!
@@ -9,9 +10,11 @@ module DICOMTools
 
 	using DICOM
 
+	# Sorry for the bad commenting/documenting ... when I find the time I'll add it
 
 
-	function gettag(
+
+	function get_tag(
 		dcmdict::AbstractVector{<: AbstractVector{DICOM.DICOMData}},
 		tag::Tuple{UInt16,UInt16};
 		outtype::Type = Nothing
@@ -27,16 +30,63 @@ module DICOMTools
 
 
 
+	function get_transformation_matrix(dcms)
+		# This breaks if InstanceNumber tag does not equal slice number
+		# Gaps between slices are handled correclty if volume is rectangular
+
+		# Only interested in the DICOM structures
+		dcms = dcms.dcms
+
+		# Get origin of first and second slice
+		# Translation of first slice is origin of the volume
+		# Translation of second minus translation of first is vector pointing in slice direction.
+		local translation::Vector{Float64}, slice_vector::Vector{Float64} 
+		let first_slice = 0, second_slice = 0
+			for (i, dcm) in enumerate(dcms)
+				instance_number = dcm[(0x0020, 0x0013)]
+				if instance_number == 1
+					first_slice = i
+				elseif instance_number == 2
+					second_slice = i
+				end
+				first_slice != 0 && second_slice != 0 && break
+			end
+			translation = dcms[first_slice][(0x0020, 0x0032)]
+			slice_vector = dcms[second_slice][(0x0020, 0x0032)] - translation
+			# Do not normalise, so that slice thickness is included
+		end
+
+		# Get "step"-vectors in row and column direction
+		local row_vector::Vector{Float64}, column_vector::Vector{Float64}
+		let orientation = dcms[1][(0x0020, 0x0037)], pixelsize = dcms[1][(0x0028, 0x0030)]
+			row_vector = pixelsize[1] .* orientation[1:3]
+			column_vector = pixelsize[2] .* orientation[4:6]
+		end
+
+		transformation = Matrix{Float64}(undef, 4, 4)
+		transformation[1:3, 1] = row_vector
+		transformation[1:3, 2] = column_vector
+		transformation[1:3, 3] = slice_vector
+		transformation[1:3, 4] = translation
+		transformation[4, 1:3] .= 0
+		transformation[4, 4] = 1
+		return transformation
+	end
+
+
+
 	function dcm2array(
 		dcms::AbstractVector{<: DICOM.DICOMData};
 		outtype::Type = Nothing
 	)::Array{<: Real, 3}
+		# Note: This breaks if InstanceNumber tag does not equal slice number
 		
 		# Get size
 		reference = dcms[1]
-		array_size = collect(
-			get(reference, tag, 1)
-			for tag in (tag"Rows", tag"Columns", tag"NumberOfSlices")
+		array_size = (
+			get(reference, tag"Rows", 1),
+			get(reference, tag"Columns", 1),
+			maximum( get(dcm, tag"InstanceNumber", 1) for dcm in dcms )
 		)
 
 		# Get type
@@ -56,32 +106,60 @@ module DICOMTools
 
 
 
+	# Define a type to store DICOMs found in a directory structure
 	const DICOMDict = Dict{
 		String,
 		NamedTuple{
-			(:paths, :dcms),
-			Tuple{Vector{String}, Vector{DICOM.DICOMData}}
+			(
+				:paths,	# Individual dicom files
+				:dcms,	# The read dicom structures
+				:pos	# Position in the files where reading stopped (see enum WHAT_TO_READ)
+			),
+			Tuple{Vector{String}, Vector{DICOM.DICOMData}, Vector{Int64}}
 		}
 	}
 
-	function load_dcms(directory::String; skip_pixels::Bool=false)::DICOMDict
-		# Should pixels be skipped?
-		aux_vr = skip_pixels ? Dict((0x7FE0, 0x0010) => DICOM.empty_vr) : Dict()
-		# TODO: Could use max_group, but then the question is what other tags the user might need.
-		# Potentially it is good to just add aux_vr and max_group and hand them through to dcm_parse,
-		# shifting the problem on the users' side
+
+
+	# This enum can be used to define up to which group to read
+	@enum WHAT_TO_READ read_all read_uid read_voxelsize skip_pixels
+	# Convert above enum to a DICOM group
+	function what_to_read_2_max_group(what::WHAT_TO_READ)::UInt16
+		# Get DICOM.dcm_parse's max_group argument to stop reading early
+		max_group = (what == read_all) ? 0xffff :
+					(what == read_uid) ? 0x0020 :
+					(what == read_voxelsize) ? 0x0028 : 0x7FDF # last option must be skip_pixels
+		return max_group
+	end
+
+
+
+	# Load Dicoms recursively
+	function load_dcms(directory::String, what::WHAT_TO_READ=read_all)::DICOMDict
+
+		max_group = what_to_read_2_max_group(what)
 
 		dcmdict = DICOMDict()
 		for (root, _, files) in walkdir(directory)
 			for filename in files
 				fullpath = joinpath(root, filename)
-				dcm = dcm_parse(fullpath; aux_vr)
+				DICOM.isdicom(fullpath) || continue
+				local dcm, pos
+				open(fullpath, "r") do file
+					dcm = dcm_parse(file; max_group)
+					if eof(file)
+						pos = -1
+					else
+						pos = position(file) - sizeof(UInt16) # Group tag was read in, revert position
+					end
+				end
 				uid = dcm[tag"SeriesInstanceUID"]
 				if haskey(dcmdict, uid)
 					push!(dcmdict[uid].paths, fullpath)
 					push!(dcmdict[uid].dcms, dcm)
+					push!(dcmdict[uid].pos, pos)
 				else
-					dcmdict[uid] = (paths=[fullpath], dcms=[dcm])
+					dcmdict[uid] = (paths=[fullpath], dcms=[dcm], pos=[pos])
 				end
 			end
 		end
@@ -90,31 +168,22 @@ module DICOMTools
 
 
 
-	function read_tag!(dcm::DICOM.DICOMData, tag::Tuple{UInt16, UInt16}, filename::String)
-		# Remove tag from vr
-		delete!(dcm.vr, tag)
+	# Read tags retrospectively
+	function load_dcms!(dcmdict::DICOMDict, what::WHAT_TO_READ=read_all)::DICOMDict
+		
+		max_group = what_to_read_2_max_group(what)
 
-		# Get starting position in file
-		start = dcm[tag]
-
-		# Open file and read
-		open(filename, "r") do f
-			seek(f, start)
-			(gelt, data, vr) = DICOM.read_element(f, dcm)
-			if gelt == DICOM.empty_tag
-				error("Could not read element $tag")
-			else
-				dcm[gelt] = data
+		for dcms in values(dcmdict)
+			for (path, dcm, pos) in zip(dcms.paths, dcms.dcms, dcms.pos)
+				pos == -1 && continue
+				open(path, "r") do file
+					seek(file, pos)
+					DICOM.read_body!(file, dcm; max_group)
+				end
 			end
 		end
-	end
 
-	function load_pixeldata!(dcmdict::DICOMDict)
-		for element in values(dcmdict)
-			for (path, dcm) in zip(element.paths, element.dcms)
-				read_tag!(dcm, tag"PixelData", path)
-			end
-		end
+		return dcmdict
 	end
 
 
@@ -145,7 +214,7 @@ module DICOMTools
 		end
 
 		# Extract tags
-		tags = gettag(selected, tag; outtype=tag_type)
+		tags = get_tag(selected, tag; outtype=tag_type)
 
 		# Get arrays from dcms
 		tojoin = [ dcm2array(dcms) for dcms in selected ]
