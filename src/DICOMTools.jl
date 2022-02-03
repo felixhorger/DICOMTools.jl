@@ -4,8 +4,7 @@ module DICOMTools
 	export get_tag
 	export get_transformation_matrix
 	export dcm2array
-	export load_dcms
-	export load_pixeldata!
+	export load_dcms, load_dcms!
 	export merge_multiseries
 
 	using DICOM
@@ -15,27 +14,38 @@ module DICOMTools
 
 
 	function get_tag(
-		dcmdict::AbstractVector{<: AbstractVector{DICOM.DICOMData}},
+		multiseries::AbstractVector{<: AbstractVector{DICOM.DICOMData}},
 		tag::Tuple{UInt16,UInt16};
 		outtype::Type = Nothing
 	)
 		# Get type
 		if outtype <: Nothing
-			outtype = eltype(dcmdict[1][1][tag])
+			outtype = typeof(multiseries[1][1][tag])
 		end
 
 		# Get values
-		return outtype[ dcms[1][tag] for dcms in dcmdict ]
+		return outtype[ dcms[1][tag] for dcms in multiseries ]
+	end
+	function get_tags(
+		multiseries::AbstractVector{<: AbstractVector{DICOM.DICOMData}},
+		tags::NTuple{N, Tuple{UInt16,UInt16}};
+		outtypes::NTuple{N, Type} = ntuple(i -> Nothing, N)
+	) where N
+		# Get type
+		for i = 1:N
+			if outtypes[i] <: Nothing
+				outtypes[i] = typeof(multiseries[1][1][tags[i]])
+			end
+		end
+
+		# Get values
+		return Tuple{outtypes...}[ dcms[1][tag] for tag in tags for dcms in multiseries ]
 	end
 
 
-
-	function get_transformation_matrix(dcms)
+	function get_transformation_matrix(dcms::AbstractVector{<: DICOM.DICOMData})
 		# This breaks if InstanceNumber tag does not equal slice number
 		# Gaps between slices are handled correclty if volume is rectangular
-
-		# Only interested in the DICOM structures
-		dcms = dcms.dcms
 
 		# Get origin of first and second slice
 		# Translation of first slice is origin of the volume
@@ -187,9 +197,12 @@ module DICOMTools
 	end
 
 
+	function filter(f::Function, dcmdict::DICOMDict)
+		Base.filter(series -> f(series.second.dcms), dcmdict)
+	end
+
 
 	"""
-		merge_multiseries(dcmdict, uids, tag, data_type=Nothing, tag_type=Nothing)
 
 		Get an array extracted from multiple DICOM series.
 		For example useful for MRI: fitting relaxation curves to series
@@ -197,27 +210,14 @@ module DICOMTools
 
 	"""
 	function merge_multiseries(
-		dcmdict::DICOMDict,
-		uids::AbstractVector{<: String},
-		tag::Tuple{UInt16, UInt16};
-		data_type::Type = Nothing,
-		tag_type::Type = Nothing
-	)::Tuple{Array, Vector}
-		# TODO: Add option to Register images?
-
-		# Get the respective DICOMs
-		selected = Vector{Vector{DICOM.DICOMData}}(undef, length(uids))
-		for (i, uid) in enumerate(uids)
-			element = get(dcmdict, uid, nothing)
-			isnothing(element) && error("UID $uid not found in DICOM batch")
-			selected[i] = element.dcms
-		end
-
-		# Extract tags
-		tags = get_tag(selected, tag; outtype=tag_type)
+		multiseries::AbstractVector{<: AbstractVector{<: DICOM.DICOMData}};
+		data_type::Type = Nothing
+	)::Array
+		# TODO: Would expect to return Array{..., 4} because dcm2array gives 3D volume.
+		# However what happens with timeseries in 3D volumes?
 
 		# Get arrays from dcms
-		tojoin = [ dcm2array(dcms) for dcms in selected ]
+		tojoin = [ dcm2array(dcms) for dcms in multiseries ]
 
 		# Join arrays
 		# Rearrange all volumes into a single array, first axis iterates over parameters,
@@ -231,7 +231,7 @@ module DICOMTools
 			1 + ndims(tojoin[1]) # parameter (1) and spatial dimensions
 		}(
 			undef,
-			length(tags),
+			length(tojoin),
 			size(tojoin[1])... # Use first element as reference
 		)
 		array_size = tuple((size(arrays, d) for d = 2:4)...)
@@ -239,7 +239,7 @@ module DICOMTools
 			@assert size(array) == array_size # Does size match?
 			arrays[i, :, :, :] = array
 		end
-		return arrays, tags
+		return arrays
 	end
 
 end
