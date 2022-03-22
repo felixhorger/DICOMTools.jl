@@ -135,21 +135,25 @@ module DICOMTools
 				end
 				first_slice != 0 && second_slice != 0 && break
 			end
-			translation = dcms[first_slice][(0x0020, 0x0032)]
+			translation = dcms[first_slice][(0x0020, 0x0032)] # [x, y, z]
 			slice_vector = dcms[second_slice][(0x0020, 0x0032)] - translation
 			# Do not normalise, so that slice thickness is included
 		end
 
 		# Get "step"-vectors in row and column direction
-		local row_vector::Vector{Float64}, column_vector::Vector{Float64}
-		let orientation = dcms[1][(0x0020, 0x0037)], pixelsize = dcms[1][(0x0028, 0x0030)]
-			row_vector = pixelsize[1] .* orientation[1:3]
-			column_vector = pixelsize[2] .* orientation[4:6]
+		local rows_vector::Vector{Float64}, columns_vector::Vector{Float64}
+		let
+			orientation = dcms[1][(0x0020, 0x0037)] # [3 row cosines and 3 column cosines]
+			# Note: Direction cosines of row point along x-direction
+			pixelsize = dcms[1][(0x0028, 0x0030)] # [row pixel spacing and column pixel spacing]
+			rows_vector = pixelsize[1] .* orientation[1:3]
+			columns_vector = pixelsize[2] .* orientation[4:6]
 		end
 
 		transformation = Matrix{Float64}(undef, 4, 4)
-		transformation[1:3, 1] = row_vector
-		transformation[1:3, 2] = column_vector
+		transformation[1:3, 1] = columns_vector # This order is correct,
+		# because the first column is multiplied with the row index
+		transformation[1:3, 2] = rows_vector
 		transformation[1:3, 3] = slice_vector
 		transformation[1:3, 4] = translation
 		transformation[4, 1:3] .= 0
