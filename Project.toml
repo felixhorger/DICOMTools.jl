@@ -5,3 +5,4 @@ version = "0.1.0"
 
 [deps]
 DICOM = "a26e6606-dd52-5f6a-a97f-4f611373d757"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"

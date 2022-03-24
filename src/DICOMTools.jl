@@ -10,6 +10,7 @@ module DICOMTools
 	export DICOMSeries
 
 	using DICOM
+	using LinearAlgebra
 
 	# Sorry for the bad commenting/documenting ... when I find the time I'll add it
 
@@ -124,21 +125,6 @@ module DICOMTools
 		# Get origin of first and second slice
 		# Translation of first slice is origin of the volume
 		# Translation of second minus translation of first is vector pointing in slice direction.
-		local translation::Vector{Float64}, slice_vector::Vector{Float64} 
-		let first_slice = 0, second_slice = 0
-			for (i, dcm) in enumerate(dcms)
-				instance_number = dcm[(0x0020, 0x0013)]
-				if instance_number == 1
-					first_slice = i
-				elseif instance_number == 2
-					second_slice = i
-				end
-				first_slice != 0 && second_slice != 0 && break
-			end
-			translation = dcms[first_slice][(0x0020, 0x0032)] # [x, y, z]
-			slice_vector = dcms[second_slice][(0x0020, 0x0032)] - translation
-			# Do not normalise, so that slice thickness is included
-		end
 
 		# Get "step"-vectors in row and column direction
 		local rows_vector::Vector{Float64}, columns_vector::Vector{Float64}
@@ -150,11 +136,32 @@ module DICOMTools
 			columns_vector = pixelsize[2] .* orientation[4:6]
 		end
 
+		local translation::Vector{Float64}, slices_vector::Vector{Float64}
+		let first_slice = 0, second_slice = 0
+			for (i, dcm) in enumerate(dcms)
+				instance_number = dcm[(0x0020, 0x0013)]
+				if instance_number == 1
+					first_slice = i
+				elseif instance_number == 2
+					second_slice = i
+				end
+				first_slice != 0 && second_slice != 0 && break
+			end
+			translation = dcms[first_slice][(0x0020, 0x0032)] # [x, y, z]
+			if second_slice > 0
+				slices_vector = dcms[second_slice][(0x0020, 0x0032)] - translation
+			else
+				# Need to compute cross product, there is no second slice
+				slices_vector = rows_vector × columns_vector
+			end
+			# Do not normalise, so that slice thickness is included
+		end
+
 		transformation = Matrix{Float64}(undef, 4, 4)
 		transformation[1:3, 1] = columns_vector # This order is correct,
 		# because the first column is multiplied with the row index
 		transformation[1:3, 2] = rows_vector
-		transformation[1:3, 3] = slice_vector
+		transformation[1:3, 3] = slices_vector
 		transformation[1:3, 4] = translation
 		transformation[4, 1:3] .= 0
 		transformation[4, 4] = 1
