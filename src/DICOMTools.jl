@@ -103,14 +103,14 @@ module DICOMTools
 	function get_tag(
 		multiseries::AbstractVector{<: DICOMSeries},
 		tag::Tuple{UInt16,UInt16},
-		outtype::Val{T} = Val(typeof(multiseries[1].dcms[1][tag]))
+		outtype::Type{T} = typeof(multiseries[1].dcms[1][tag])
 	) where T
 		T[ series.dcms[1][tag] for series in multiseries ]
 	end
 	function get_tags(
 		multiseries::AbstractVector{<: DICOMSeries},
 		tags::NTuple{N, Tuple{UInt16,UInt16}},
-		outtypes::Val{T} = Val(ntuple(i -> typeof(multiseries[1].dcms[1][tags[i]]), N))
+		outtypes::Type{T} = ntuple(i -> typeof(multiseries[1].dcms[1][tags[i]]), N)
 	) where {N, T}
 		T[ series.dcms[1][tag] for tag in tags for series in multiseries ]
 	end
@@ -172,7 +172,7 @@ module DICOMTools
 
 	function dcm2array(
 		series::DICOMSeries,
-		outtype::Val{T} = Val(Float64)
+		outtype::Type{T}
 	)::Array{T, 3} where T
 		# Note: This breaks if InstanceNumber tag does not equal slice number
 
@@ -210,20 +210,20 @@ module DICOMTools
 	"""
 	function merge_multiseries(
 		multiseries::AbstractVector{<: DICOMSeries},
-		data_type::Val{T} = Val(eltype(multiseries[1].dcms[1]))
-	)::Array where T
+		datatype::Type
+	)
 		# TODO: Would expect to return Array{..., 4} because dcm2array gives 3D volume.
 		# However what happens with timeseries in 3D volumes?
 
 		# Get arrays from dcms
-		tojoin = [ dcm2array(dcms) for dcms in multiseries ]
+		tojoin = [ dcm2array(dcms, datatype) for dcms in multiseries ]
 
 		# Join arrays
 		# Rearrange all volumes into a single array, first axis iterates over parameters,
 		# this makes access to signal(parameter) easier.
 		# Create empty array from the size of the first element in tojoin
 		arrays = Array{
-			T,
+			datatype,
 			1 + ndims(tojoin[1]) # parameter (1) and spatial dimensions
 		}(
 			undef,
