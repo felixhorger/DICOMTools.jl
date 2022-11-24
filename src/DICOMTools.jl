@@ -25,7 +25,7 @@ module DICOMTools
 	# This enum can be used to define up to which group to read
 	@enum WhatToRead read_all read_uid read_voxelsize skip_pixels
 	# Convert above enum to a DICOM group
-	function get_max_group(what::WhatToRead)::UInt16
+	function get_max_group(what::WhatToRead)
 		# Get DICOM.dcm_parse's max_group argument to stop reading early
 		max_group = (what == read_all) ? 0xffff :
 					(what == read_uid) ? 0x0020 :
@@ -34,9 +34,8 @@ module DICOMTools
 	end
 
 
-
 	# Load Dicoms recursively
-	function load_dcms(directory::String, what::WhatToRead=read_all)::DICOMDict
+	function load_dcms(directory::String, what::WhatToRead=read_all)
 
 		max_group = get_max_group(what)
 
@@ -67,20 +66,21 @@ module DICOMTools
 		return dcmdict
 	end
 
+
 	# Read tags retrospectively
-	function load_dcms!(dcmdict::DICOMDict, what::WhatToRead=read_all)::DICOMDict
+	function load_dcms!(dcmdict::DICOMDict, what::WhatToRead=read_all)
 		max_group = get_max_group(what)
 		for series in values(dcmdict)
 			load_dcms!(series, max_group)
 		end
 		return dcmdict
 	end
-	function load_dcms!(series::DICOMSeries, what::WhatToRead=read_all)::DICOMSeries
+	function load_dcms!(series::DICOMSeries, what::WhatToRead=read_all)
 		max_group = get_max_group(what)
 		load_dcms!(series::DICOMSeries, max_group)
 		return series
 	end
-	function load_dcms!(series::DICOMSeries, max_group::UInt16)::DICOMSeries
+	function load_dcms!(series::DICOMSeries, max_group::UInt16)
 		for (path, dcm, pos) in zip(series.paths, series.dcms, series.pos)
 			pos == -1 && continue
 			open(path, "r") do file
@@ -102,21 +102,21 @@ module DICOMTools
 
 	function get_tag(
 		multiseries::AbstractVector{<: DICOMSeries},
-		tag::Tuple{UInt16,UInt16},
+		tag::NTuple{2, UInt16},
 		outtype::Type{T} = typeof(multiseries[1].dcms[1][tag])
 	) where T
 		T[ series.dcms[1][tag] for series in multiseries ]
 	end
 	function get_tags(
 		multiseries::AbstractVector{<: DICOMSeries},
-		tags::NTuple{N, Tuple{UInt16,UInt16}},
+		tags::NTuple{N, NTuple{2, UInt16}},
 		outtypes::Type{T} = ntuple(i -> typeof(multiseries[1].dcms[1][tags[i]]), N)
 	) where {N, T}
 		T[ series.dcms[1][tag] for tag in tags for series in multiseries ]
 	end
 
 
-	function get_transformation_matrix(series::DICOMSeries)::Matrix{Float64}
+	function get_transformation_matrix(series::DICOMSeries)
 		# This breaks if InstanceNumber tag does not equal slice number
 		# Gaps between slices are handled correclty if volume is rectangular
 
@@ -169,11 +169,7 @@ module DICOMTools
 	end
 
 
-
-	function dcm2array(
-		series::DICOMSeries,
-		outtype::Type{T}
-	)::Array{T, 3} where T
+	function dcm2array(series::DICOMSeries, outtype::Type{T}) where T
 		# Note: This breaks if InstanceNumber tag does not equal slice number
 
 		dcms = series.dcms
@@ -197,10 +193,6 @@ module DICOMTools
 	end
 
 
-
-
-
-
 	"""
 
 		Get an array extracted from multiple DICOM series.
@@ -208,10 +200,7 @@ module DICOMTools
 		acquired with different inversion/echo times.
 
 	"""
-	function merge_multiseries(
-		multiseries::AbstractVector{<: DICOMSeries},
-		datatype::Type
-	)
+	function merge_multiseries(multiseries::AbstractVector{<: DICOMSeries}, datatype::Type)
 		# TODO: Would expect to return Array{..., 4} because dcm2array gives 3D volume.
 		# However what happens with timeseries in 3D volumes?
 
