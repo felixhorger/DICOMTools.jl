@@ -103,17 +103,22 @@ module DICOMTools
 	function get_tag(
 		multiseries::AbstractVector{<: DICOMSeries},
 		tag::NTuple{2, UInt16},
-		outtype::Type{T} = typeof(multiseries[1].dcms[1][tag])
+		outtype::Type{T},
+		default::T
 	) where T
-		T[ series.dcms[1][tag] for series in multiseries ]
+		tags = Vector{T}(undef, length(multiseries))
+		for i in eachindex(tags)
+			tags[i] = get(multiseries[i].dcms[1], tag, default)
+		end
+		return tags
 	end
-	function get_tags(
-		multiseries::AbstractVector{<: DICOMSeries},
-		tags::NTuple{N, NTuple{2, UInt16}},
-		outtypes::Type{T} = ntuple(i -> typeof(multiseries[1].dcms[1][tags[i]]), N)
-	) where {N, T}
-		T[ series.dcms[1][tag] for tag in tags for series in multiseries ]
-	end
+	#function get_tags(
+	#	multiseries::AbstractVector{<: DICOMSeries},
+	#	tags::NTuple{N, NTuple{2, UInt16}},
+	#	outtypes::Type{T}
+	#) where {N, T}
+	#	T[ series.dcms[1][tag] for tag in tags for series in multiseries ]
+	#end
 
 
 	function get_transformation_matrix(series::DICOMSeries)
